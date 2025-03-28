@@ -219,15 +219,41 @@ def get_ssl_context(domain):
 async def start_server():
     tasks = []
 
-    # HTTPS Listener (port 443)
-    for public_domain in DOMAIN_MAP.keys():
-        ssl_context = get_ssl_context(public_domain)
-        if ssl_context:
-            print(f"Starting HTTPS proxy for {public_domain} on port 443...")
-            runner_https = web.AppRunner(app)
-            await runner_https.setup()
-            site_https = web.TCPSite(runner_https, "0.0.0.0", 443, ssl_context=ssl_context)
-            tasks.append(site_https.start())
+    # Create a single SSL context for all domains using SNI
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    def sni_callback(ssl_obj, server_name, context):
+        """Dynamically switch SSL context based on SNI (Server Name Indication)."""
+        print(f"SNI callback invoked for: {server_name}")
+
+        # Use the requested server name to load the appropriate certificate
+        if server_name in DOMAIN_MAP:
+            cert_path = f"/etc/letsencrypt/live/{server_name}/fullchain.pem"
+            key_path = f"/etc/letsencrypt/live/{server_name}/privkey.pem"
+
+            # Fallback to self-signed if Let's Encrypt certificates are not found
+            if not (os.path.exists(cert_path) and os.path.exists(key_path)):
+                print(f"Certificate for {server_name} not found. Falling back to self-signed.")
+                cert_path, key_path = generate_self_signed_cert(server_name)
+
+            try:
+                # Create a temporary SSL context for this connection
+                temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+                ssl_obj.context = temp_context
+                print(f"Loaded certificate for {server_name}")
+            except Exception as e:
+                print(f"Error loading certificate for {server_name}: {e}")
+
+    # Set the SNI callback to dynamically load certificates
+    ssl_context.sni_callback = sni_callback
+
+    # HTTPS Listener (port 443) - Single server with SNI support
+    print("Starting HTTPS proxy on port 443 with SNI support...")
+    runner_https = web.AppRunner(app)
+    await runner_https.setup()
+    site_https = web.TCPSite(runner_https, "0.0.0.0", 443, ssl_context=ssl_context)
+    tasks.append(site_https.start())
 
     app_http = web.Application()
     app_http.router.add_route('*', '/{tail:.*}', handle_request)

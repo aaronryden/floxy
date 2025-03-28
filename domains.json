@@ -1,3 +1,4 @@
 {
-  "yourexample.com": { "upstream": "localhost:8888", "redirectInsecure": true }
+  "yourexample.com": { "upstream": "localhost:8888", "redirectInsecure": true },
+  "yourexample2.com": { "upstream": "localhost:8888", "redirectInsecure": true }
 }
