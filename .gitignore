@@ -2,4 +2,4 @@ bin/
 include/
 lib/
 selfsigned/
-pyenv.cfg
+pyvenv.cfg

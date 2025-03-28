@@ -9,6 +9,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import threading
 
+CERTBOT_PORT = 8888  # sudo certbot certonly --standalone --http-01-port 8888 -d example.com
 # Configuration file path
 CONFIG_FILE = "domains.json"
 DOMAIN_MAP = {}
@@ -28,12 +29,6 @@ def start_file_watcher():
     observer.start()
     print(f"Started watching {CONFIG_FILE} for changes.")
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
 
 def load_domain_map():
     global DOMAIN_MAP
@@ -69,7 +64,7 @@ def generate_self_signed_cert(domain):
 
 async def handle_acme_challenge(request):
     """Handle ACME challenges from Let's Encrypt."""
-    challenge_url = f"http://127.0.0.1:8888{request.path_qs}"
+    challenge_url = f"http://127.0.0.1:{CERTBOT_PORT}{request.path_qs}"
     print(f"Forwarding ACME challenge to: {challenge_url}")
     try:
         async with aiohttp.ClientSession() as session:
@@ -86,10 +81,7 @@ async def handle_domain_proxy(request):
     """Proxy the incoming request to the appropriate upstream domain."""
     # Extract the host from the request
     host = request.headers.get("Host", "").split(":")[0]
-    if host not in DOMAIN_MAP:
-        print(f"Host {host} not found in DOMAIN_MAP.")
-        return web.Response(text="403 Forbidden: Domain not allowed", status=403)
-
+    
     # Map the public domain to the upstream domain
     upstream_domain = DOMAIN_MAP[host]['upstream']
     schemes = ['https', 'http']
@@ -132,10 +124,7 @@ async def handle_websocket_proxy(request):
     """Proxy WebSocket connections to the upstream server."""
     host = request.headers.get("Host", "").split(":")[0]
     upstream_domain = DOMAIN_MAP.get(host)
-
-    if not upstream_domain:
-        return web.Response(text="403 Forbidden: Domain not allowed", status=403)
-
+    upstream_domain = upstream_domain['upstream']
     # Try both secure (wss) and non-secure (ws) schemes
     schemes = ['wss', 'ws']
 
