@@ -92,7 +92,7 @@ async def handle_domain_proxy(request):
 
     # Map the public domain to the upstream domain
     upstream_domain = DOMAIN_MAP[host]['upstream']
-    schemes = ['https', 'http'] if request.scheme == 'https' else ['http', 'https']
+    schemes = ['https', 'http']
 
     for scheme in schemes:
         upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
@@ -136,45 +136,53 @@ async def handle_websocket_proxy(request):
     if not upstream_domain:
         return web.Response(text="403 Forbidden: Domain not allowed", status=403)
 
-    upstream_url = f"ws://{upstream_domain}{request.path_qs}"
-    print(f"WebSocket proxying to: {upstream_url}")
+    # Try both secure (wss) and non-secure (ws) schemes
+    schemes = ['wss', 'ws']
 
-    try:
-        # Establish a WebSocket connection with the client
-        ws_client = web.WebSocketResponse()
-        await ws_client.prepare(request)
+    for scheme in schemes:
+        upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
+        print(f"Attempting WebSocket proxy to: {upstream_url}")
 
-        # Establish a WebSocket connection with the upstream server
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(upstream_url) as ws_server:
-                async def client_to_server():
-                    async for msg in ws_client:
-                        if msg.type == web.WSMsgType.TEXT:
-                            await ws_server.send_str(msg.data)
-                        elif msg.type == web.WSMsgType.BINARY:
-                            await ws_server.send_bytes(msg.data)
-                        elif msg.type == web.WSMsgType.CLOSE:
-                            await ws_server.close()
-                            break
+        try:
+            # Establish a WebSocket connection with the client
+            ws_client = web.WebSocketResponse()
+            await ws_client.prepare(request)
 
-                async def server_to_client():
-                    async for msg in ws_server:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            await ws_client.send_str(msg.data)
-                        elif msg.type == aiohttp.WSMsgType.BINARY:
-                            await ws_client.send_bytes(msg.data)
-                        elif msg.type == aiohttp.WSMsgType.CLOSE:
-                            await ws_client.close()
-                            break
+            # Establish a WebSocket connection with the upstream server
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(upstream_url, ssl=(scheme == 'wss')) as ws_server:
+                    async def client_to_server():
+                        async for msg in ws_client:
+                            if msg.type == web.WSMsgType.TEXT:
+                                await ws_server.send_str(msg.data)
+                            elif msg.type == web.WSMsgType.BINARY:
+                                await ws_server.send_bytes(msg.data)
+                            elif msg.type == web.WSMsgType.CLOSE:
+                                await ws_server.close()
+                                break
 
-                # Run both client-to-server and server-to-client concurrently
-                await asyncio.gather(client_to_server(), server_to_client())
+                    async def server_to_client():
+                        async for msg in ws_server:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                await ws_client.send_str(msg.data)
+                            elif msg.type == aiohttp.WSMsgType.BINARY:
+                                await ws_client.send_bytes(msg.data)
+                            elif msg.type == aiohttp.WSMsgType.CLOSE:
+                                await ws_client.close()
+                                break
 
-        return ws_client
+                    # Run both client-to-server and server-to-client concurrently
+                    await asyncio.gather(client_to_server(), server_to_client())
 
-    except Exception as e:
-        print(f"WebSocket error: {str(e)}")
-        return web.Response(text=f"WebSocket error: {str(e)}", status=502)
+            print(f"WebSocket successfully proxied via {scheme}.")
+            return ws_client
+
+        except Exception as e:
+            print(f"Failed to proxy using {scheme}. Error: {str(e)}")
+            continue  # Try the next scheme if the current one fails
+
+    print(f"All schemes (wss, ws) failed for {upstream_domain}. Returning 502.")
+    return web.Response(text="502 Bad Gateway: Unable to reach WebSocket upstream server", status=502)
 
 # HTTP Listener (port 80) - Redirect to HTTPS
 async def handle_redirect(request):
