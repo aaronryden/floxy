@@ -91,33 +91,42 @@ async def handle_domain_proxy(request):
         return web.Response(text="403 Forbidden: Domain not allowed", status=403)
 
     # Map the public domain to the upstream domain
-    upstream_domain = DOMAIN_MAP[host]
-    print(f"Proxying request to: {upstream_url}")
-    upstream_url = f"{request.scheme}://{upstream_domain}{request.path_qs}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.request(
-                method=request.method,
-                url=upstream_url,
-                headers=request.headers,
-                data=request.content,
-                ssl=False
-            ) as upstream_response:
+    upstream_domain = DOMAIN_MAP[host]['upstream']
+    schemes = ['https', 'http'] if request.scheme == 'https' else ['http', 'https']
 
-                # Prepare the response headers
-                response = web.StreamResponse(status=upstream_response.status, headers=upstream_response.headers)
-                await response.prepare(request)
+    for scheme in schemes:
+        upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
+        print(f"Trying to proxy request to: {upstream_url}")
 
-                # Stream response body to client
-                async for chunk in upstream_response.content.iter_chunked(1024):
-                    await response.write(chunk)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.request(
+                    method=request.method,
+                    url=upstream_url,
+                    headers=request.headers,
+                    data=request.content,
+                    ssl=False
+                ) as upstream_response:
 
-                await response.write_eof()
-                return response
+                    # Prepare the response headers
+                    response = web.StreamResponse(status=upstream_response.status, headers=upstream_response.headers)
+                    await response.prepare(request)
 
-    except Exception as e:
-        print(f"Error fetching from upstream: {str(e)}")
-        return web.Response(text=f"Error fetching from upstream: {str(e)}", status=502)
+                    # Stream response body to client
+                    async for chunk in upstream_response.content.iter_chunked(1024):
+                        await response.write(chunk)
+
+                    await response.write_eof()
+                    print(f"Successfully proxied to: {upstream_url}")
+                    return response
+
+        except Exception as e:
+            print(f"Failed to proxy using {scheme}. Error: {str(e)}")
+            continue  # Try the next scheme if the current one fails
+
+    print(f"All schemes failed for {upstream_domain}. Returning 502.")
+    return web.Response(text="502 Bad Gateway: Unable to reach upstream server", status=502)
+
 
 async def handle_websocket_proxy(request):
     """Proxy WebSocket connections to the upstream server."""
@@ -167,9 +176,24 @@ async def handle_websocket_proxy(request):
         print(f"WebSocket error: {str(e)}")
         return web.Response(text=f"WebSocket error: {str(e)}", status=502)
 
+# HTTP Listener (port 80) - Redirect to HTTPS
+async def handle_redirect(request):
+    host = request.headers.get("Host", "").split(":")[0]
+    redirect_url = f"https://{host}{request.rel_url}"
+    print(f"Redirecting HTTP to HTTPS: {redirect_url}")
+    raise web.HTTPPermanentRedirect(redirect_url)
 
 async def handle_request(request):
     """Main request handler."""
+    host = request.headers.get("Host", "").split(":")[0]
+    if host not in DOMAIN_MAP:
+        print(f"Host {host} not found in DOMAIN_MAP.")
+        return web.Response(text="403 Forbidden: Domain not allowed", status=403)
+
+    domainConfig = DOMAIN_MAP[host]
+    if request.scheme == "http" and domainConfig.get('redirectInsecure', False):
+        return await handle_redirect(request)
+    
     # Check if the request is for an ACME challenge
     if request.path.startswith('/.well-known/acme-challenge/'):
         return await handle_acme_challenge(request)
@@ -198,28 +222,21 @@ def get_ssl_context(domain):
 async def start_server():
     tasks = []
 
-    # HTTPS Listener (port 8443)
+    # HTTPS Listener (port 443)
     for public_domain in DOMAIN_MAP.keys():
         ssl_context = get_ssl_context(public_domain)
         if ssl_context:
-            print(f"Starting HTTPS proxy for {public_domain} on port 8443...")
+            print(f"Starting HTTPS proxy for {public_domain} on port 443...")
             runner_https = web.AppRunner(app)
             await runner_https.setup()
-            site_https = web.TCPSite(runner_https, "0.0.0.0", 8443, ssl_context=ssl_context)
+            site_https = web.TCPSite(runner_https, "0.0.0.0", 443, ssl_context=ssl_context)
             tasks.append(site_https.start())
 
-    # HTTP Listener (port 480) - Redirect to HTTPS
-    async def http_redirect(request):
-        host = request.headers.get("Host", "").split(":")[0]
-        redirect_url = f"https://{host}{request.rel_url}"
-        print(f"Redirecting HTTP to HTTPS: {redirect_url}")
-        raise web.HTTPPermanentRedirect(redirect_url)
-
     app_http = web.Application()
-    app_http.router.add_route('*', '/{tail:.*}', http_redirect)
+    app_http.router.add_route('*', '/{tail:.*}', handle_request)
     runner_http = web.AppRunner(app_http)
     await runner_http.setup()
-    site_http = web.TCPSite(runner_http, "0.0.0.0", 480)
+    site_http = web.TCPSite(runner_http, "0.0.0.0", 80)
     tasks.append(site_http.start())
 
     if tasks:
