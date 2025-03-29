@@ -60,6 +60,9 @@ def generate_self_signed_cert(domain):
         )
         os.system(cmd)
         print(f"Self-signed certificate generated for {domain}.")
+
+    # todo: check if cert expired
+
     return cert_path, key_path
 
 async def handle_acme_challenge(request):
@@ -202,25 +205,16 @@ async def handle_request(request):
     # Otherwise, handle as a domain proxy
     return await handle_domain_proxy(request)
 
-def get_ssl_context(domain):
-    """Load SSL certificates for the given domain, falling back to self-signed if necessary."""
-    cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-    key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-
-    # Fallback to self-signed certificate if Let's Encrypt certificates are not found
-    if not (os.path.exists(cert_path) and os.path.exists(key_path)):
-        print(f"Certificate for {domain} not found. Falling back to self-signed certificate.")
-        cert_path, key_path = generate_self_signed_cert(domain)
-
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ssl_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
-    return ssl_context
+ssl_context_cache = {}
 
 async def start_server():
     tasks = []
 
     # Create a single SSL context for all domains using SNI
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.options |= ssl.OP_NO_COMPRESSION
+    # ssl_context.session_cache_mode = ssl.SESS_CACHE_SERVER
+    # ssl_context.set_session_id(b"proxy_server")
 
     def sni_callback(ssl_obj, server_name, context):
         """Dynamically switch SSL context based on SNI (Server Name Indication)."""
@@ -235,11 +229,18 @@ async def start_server():
             if not (os.path.exists(cert_path) and os.path.exists(key_path)):
                 print(f"Certificate for {server_name} not found. Falling back to self-signed.")
                 cert_path, key_path = generate_self_signed_cert(server_name)
+                # asyncio.create_task(run_in_thread(obtain_letsencrypt_cert, server_name))
+
 
             try:
                 # Create a temporary SSL context for this connection
-                temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+                if server_name in ssl_context_cache:
+                    temp_context = ssl_context_cache[server_name]
+                else:
+                    temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+                    ssl_context_cache[server_name] = temp_context
+
                 ssl_obj.context = temp_context
                 print(f"Loaded certificate for {server_name}")
             except Exception as e:
