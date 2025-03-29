@@ -221,7 +221,12 @@ async def start_server():
         print(f"SNI callback invoked for: {server_name}")
 
         # Use the requested server name to load the appropriate certificate
-        if server_name in DOMAIN_MAP:
+        if not server_name in DOMAIN_MAP:
+            raise Exception(f"Server name '{server_name}' not found in DOMAIN_MAP")
+        else:
+            if server_name in ssl_context_cache:
+                temp_context = ssl_context_cache[server_name]
+
             cert_path = f"/etc/letsencrypt/live/{server_name}/fullchain.pem"
             key_path = f"/etc/letsencrypt/live/{server_name}/privkey.pem"
 
@@ -231,15 +236,10 @@ async def start_server():
                 cert_path, key_path = generate_self_signed_cert(server_name)
                 # asyncio.create_task(run_in_thread(obtain_letsencrypt_cert, server_name))
 
-
             try:
-                # Create a temporary SSL context for this connection
-                if server_name in ssl_context_cache:
-                    temp_context = ssl_context_cache[server_name]
-                else:
-                    temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                    temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
-                    ssl_context_cache[server_name] = temp_context
+                temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+                ssl_context_cache[server_name] = temp_context
 
                 ssl_obj.context = temp_context
                 print(f"Loaded certificate for {server_name}")
