@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  floxy:
+    image: aaron/floxy:latest
+    container_name: floxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Persist Let's Encrypt certs and logs, self signed certs and share config directory
+      - ./mount/certbot/etc:/etc/letsencrypt
+      - ./mount/certbot/log:/var/log/letsencrypt
+      - ./mount/selfsigned:/app/selfsigned
+      - ./config:/app/config

@@ -11,7 +11,7 @@ import threading
 
 CERTBOT_PORT = 8888  # sudo certbot certonly --standalone --http-01-port 8888 -d example.com
 # Configuration file path
-CONFIG_FILE = "domains.json"
+CONFIG_FILE = "config/domains.json"
 DOMAIN_MAP = {}
 
 class ConfigFileHandler(FileSystemEventHandler):
@@ -22,12 +22,16 @@ class ConfigFileHandler(FileSystemEventHandler):
             load_domain_map()
 
 def start_file_watcher():
-    """Start watching the configuration file for changes."""
-    event_handler = ConfigFileHandler()
-    observer = Observer()
-    observer.schedule(event_handler, path=os.path.dirname(CONFIG_FILE), recursive=False)
-    observer.start()
-    print(f"Started watching {CONFIG_FILE} for changes.")
+    try:
+        """Start watching the configuration file for changes."""
+        config_path = os.path.dirname(CONFIG_FILE)
+        event_handler = ConfigFileHandler()
+        observer = Observer()
+        observer.schedule(event_handler, path=config_path, recursive=False)
+        observer.start()
+        print(f"Started watching {config_path} for changes.")
+    except Exception as e:
+        print(f"Error starting file watcher {config_path}: {str(e)}")
 
 
 def load_domain_map():
@@ -80,6 +84,8 @@ async def handle_acme_challenge(request):
         print(f"Error forwarding ACME challenge: {str(e)}")
         return web.Response(text=f"ACME challenge forwarding failed: {str(e)}", status=502)
 
+WEB_DOMAIN_SCHEMES = {}
+
 async def handle_domain_proxy(request):
     """Proxy the incoming request to the appropriate upstream domain."""
     # Extract the host from the request
@@ -87,7 +93,9 @@ async def handle_domain_proxy(request):
     
     # Map the public domain to the upstream domain
     upstream_domain = DOMAIN_MAP[host]['upstream']
-    schemes = ['https', 'http']
+    if not upstream_domain in WEB_DOMAIN_SCHEMES:
+        WEB_DOMAIN_SCHEMES[upstream_domain] = ['https', 'http']
+    schemes = WEB_DOMAIN_SCHEMES[upstream_domain]
 
     for scheme in schemes:
         upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
@@ -113,6 +121,8 @@ async def handle_domain_proxy(request):
 
                     await response.write_eof()
                     print(f"Successfully proxied to: {upstream_url}")
+                    if scheme == 'http':
+                        WEB_DOMAIN_SCHEMES[upstream_domain] = ['http']
                     return response
 
         except Exception as e:
@@ -122,14 +132,19 @@ async def handle_domain_proxy(request):
     print(f"All schemes failed for {upstream_domain}. Returning 502.")
     return web.Response(text="502 Bad Gateway: Unable to reach upstream server", status=502)
 
+WS_DOMAIN_SCHEMES = {}
 
 async def handle_websocket_proxy(request):
     """Proxy WebSocket connections to the upstream server."""
     host = request.headers.get("Host", "").split(":")[0]
     upstream_domain = DOMAIN_MAP.get(host)
     upstream_domain = upstream_domain['upstream']
+
+    if not upstream_domain in WS_DOMAIN_SCHEMES:
+        WS_DOMAIN_SCHEMES[upstream_domain] = ['wss', 'ws']
+
     # Try both secure (wss) and non-secure (ws) schemes
-    schemes = ['wss', 'ws']
+    schemes = WS_DOMAIN_SCHEMES[upstream_domain]
 
     for scheme in schemes:
         upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
@@ -165,6 +180,8 @@ async def handle_websocket_proxy(request):
 
                     # Run both client-to-server and server-to-client concurrently
                     await asyncio.gather(client_to_server(), server_to_client())
+                    if scheme == 'ws':
+                        WS_DOMAIN_SCHEMES[upstream_domain] = ['ws']
 
             print(f"WebSocket successfully proxied via {scheme}.")
             return ws_client
@@ -202,7 +219,7 @@ async def handle_request(request):
     if "upgrade" in request.headers.get("Connection", "").lower() and request.headers.get("Upgrade", "").lower() == "websocket":
         return await handle_websocket_proxy(request)
 
-    # Otherwise, handle as a domain proxy
+    # Otherwise, handle as web proxy
     return await handle_domain_proxy(request)
 
 ssl_context_cache = {}
