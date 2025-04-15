@@ -1,5 +1,4 @@
 import asyncio
-import aiohttp
 from aiohttp import web
 import ssl
 import os
@@ -33,6 +32,62 @@ def start_file_watcher():
     except Exception as e:
         print(f"Error starting file watcher {config_path}: {str(e)}")
 
+def create_certbot_cert(domain):
+    """Create a certificate using certbot."""
+    try:
+        print(f"Creating certificate for {domain} using certbot...")
+        os.system(f"certbot certonly --standalone --http-01-port {CERTBOT_PORT} -d {domain}")
+        print(f"Certificate created for {domain}.")
+    except Exception as e:
+        print(f"Error creating certificate for {domain}: {str(e)}")
+
+def curl_domain_test(domain):
+    """Test the domain using curl with a random value test header."""
+    try:
+        # Generate a random value for the test header
+        test_header = "X-Test-Header"
+        test_value = os.urandom(16).hex()
+        # Use curl to test the domain with the test header
+        os.system(f"curl -I -H '{test_header}: {test_value}' http://{domain}")
+        if response == 0:
+            print(f"Domain {domain} is reachable.")
+            # check if the test header is present in the map
+            if 'testHeader' in DOMAIN_MAP[domain]:
+                # compare test header value
+                if DOMAIN_MAP[domain]['testHeader'] == test_value:
+                    print(f"Test header matches for {domain}.")
+                    # safe to create certbot cert
+                    create_certbot_cert(domain)
+            else:
+                print(f"Test header not found in domain map for {domain}. Request must not be routing correctly.")
+        else:
+            print(f"Domain {domain} is not reachable.")
+
+    except Exception as e:
+        print(f"Error testing domain {domain}: {str(e)}")
+
+def test_domain(domain):
+    # Test if the domain resolves to us
+    try:
+        # see if cert exists 
+        cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+        key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+        if not (os.path.exists(cert_path) and os.path.exists(key_path)):
+            print(f"Certificate for {domain} found.")
+            response = os.system(f"ping -c 1 {domain}")
+            if response == 0:
+                # compare IP address to any address of this machine
+                ip_address = os.popen(f"getent hosts {domain}").read().split()[0]
+                local_ip = os.popen("hostname -I").read().strip()
+                if ip_address in local_ip:
+                    print(f"Domain {domain} resolves to this server.")
+                    create_certbot_cert(domain)
+                else:
+                    print(f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer.")
+                    # curl this domain with test header
+                    curl_domain_test(domain)
+    except Exception as e:
+        print(f"Error testing domain {domain}: {str(e)}")
 
 def load_domain_map():
     global DOMAIN_MAP
@@ -40,6 +95,14 @@ def load_domain_map():
         with open(CONFIG_FILE, "r") as file:
             DOMAIN_MAP = json.load(file)
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Loaded domain configuration: {DOMAIN_MAP}")
+            for domain, config in DOMAIN_MAP.items():
+                if 'upstream' not in config:
+                    raise ValueError(f"Missing 'upstream' key for domain: {domain}")
+                if 'redirectInsecure' not in config:
+                    DOMAIN_MAP[domain]['redirectInsecure'] = False
+
+                # Test each domain in the map on separate thread
+                threading.Thread(target=test_domain, args=(domain,), daemon=True).start()
     except Exception as e:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error loading domain configuration: {str(e)}")
 
@@ -96,6 +159,16 @@ async def handle_domain_proxy(request):
     if not upstream_domain in WEB_DOMAIN_SCHEMES:
         WEB_DOMAIN_SCHEMES[upstream_domain] = ['https', 'http']
     schemes = WEB_DOMAIN_SCHEMES[upstream_domain]
+
+    # check for test header
+    test_header = request.headers.get("X-Test-Header")
+    if test_header:
+        print(f"Test header found: {test_header}")
+        # store header value
+        if 'testHeader' not in DOMAIN_MAP[host]:
+            DOMAIN_MAP[host]['testHeader'] = test_header
+
+
 
     for scheme in schemes:
         upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
