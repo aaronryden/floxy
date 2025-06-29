@@ -55,6 +55,8 @@ async def test_reverse_proxy_basic_with_https_redirect():
     async with ClientSession() as session:
         async with session.get(url + "/api/test", headers=headers, allow_redirects=False) as response:
             assert response.status == 308, f"Unexpected status: {response.status}"
+            assert response.headers.get("Location") == "https://example.com/api/test", f"Unexpected redirect: {response.headers.get('Location')}"
+
 
 import ssl
 from aiohttp import TCPConnector
