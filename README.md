@@ -7,4 +7,8 @@
 * **Secure SSL Handling:** Utilizes Let's Encrypt certificates for secure HTTPS connections.
 * **Automatic Fallback to Self-Signed Certificates:** Ensures immediate availability even if SSL certificates are missing.
 * **Smart Upstream Connection:** Prioritizes secure (HTTPS/WSS) connections and gracefully falls back to insecure (HTTP/WS) if needed.
-* Append to your hosts file to test with the sample domain: `127.0.0.1 yourexample.com`
+* Append to your hosts file to test with the sample domain: `127.0.0.1 example.com example2.com`
+
+
+## Testing
+* run tests with sudo to allow binding to 443/80

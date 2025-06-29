@@ -1,6 +1,10 @@
+from certbot._internal.main import main as certbot_main
 import asyncio
+import socket
 from aiohttp import web
+import aiohttp
 import ssl
+import ipaddress
 import os
 import json
 import time
@@ -8,6 +12,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import threading
 
+SECURE_LISTEN_PORT = 443
+LISTEN_PORT = 80
 CERTBOT_PORT = 8888  # sudo certbot certonly --standalone --http-01-port 8888 -d example.com
 # Configuration file path
 CONFIG_FILE = "config/domains.json"
@@ -31,6 +37,28 @@ def start_file_watcher():
         print(f"Started watching {config_path} for changes.")
     except Exception as e:
         print(f"Error starting file watcher {config_path}: {str(e)}")
+
+def is_public_ip(ip_str):
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)
+    except ValueError:
+        return False
+
+def py_create_certbot_cert(domain, certbot_port=8888):
+    args = [
+        'certonly',
+        '--standalone',
+        '--http-01-port', str(certbot_port),
+        '--non-interactive',
+        '--agree-tos',
+        '-m', 'admin@example.com',  # change to your email
+        '-d', domain
+    ]
+
+    print(f"[Certbot] Requesting certificate for {domain} on port {certbot_port}...")
+    result = certbot_main(args)
+    print(f"[Certbot] Finished with exit code: {result}")
 
 def create_certbot_cert(domain):
     """Create a certificate using certbot."""
@@ -57,7 +85,7 @@ def curl_domain_test(domain):
                 if DOMAIN_MAP[domain]['testHeader'] == test_value:
                     print(f"Test header matches for {domain}.")
                     # safe to create certbot cert
-                    create_certbot_cert(domain)
+                    py_create_certbot_cert(domain)
             else:
                 print(f"Test header not found in domain map for {domain}. Request must not be routing correctly.")
         else:
@@ -77,11 +105,17 @@ def test_domain(domain):
             response = os.system(f"ping -c 1 {domain}")
             if response == 0:
                 # compare IP address to any address of this machine
-                ip_address = os.popen(f"getent hosts {domain}").read().split()[0]
-                local_ip = os.popen("hostname -I").read().strip()
+                # ip_address = os.popen(f"getent hosts {domain}").read().split()[0]
+                ip_address = socket.gethostbyname(domain)
+
+                local_ip = socket.gethostbyname(domain)
                 if ip_address in local_ip:
                     print(f"Domain {domain} resolves to this server.")
-                    create_certbot_cert(domain)
+                    if is_public_ip(ip_address):
+                        print(f"Domain {domain} resolves to this server and is public.")
+                        py_create_certbot_cert(domain)
+                    else:
+                        print(f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt.")
                 else:
                     print(f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer.")
                     # curl this domain with test header
@@ -343,14 +377,14 @@ async def start_server():
     print("Starting HTTPS proxy on port 443 with SNI support...")
     runner_https = web.AppRunner(app)
     await runner_https.setup()
-    site_https = web.TCPSite(runner_https, "0.0.0.0", 443, ssl_context=ssl_context)
+    site_https = web.TCPSite(runner_https, "0.0.0.0", SECURE_LISTEN_PORT, ssl_context=ssl_context)
     tasks.append(site_https.start())
 
     app_http = web.Application()
     app_http.router.add_route('*', '/{tail:.*}', handle_request)
     runner_http = web.AppRunner(app_http)
     await runner_http.setup()
-    site_http = web.TCPSite(runner_http, "0.0.0.0", 80)
+    site_http = web.TCPSite(runner_http, "0.0.0.0", LISTEN_PORT)
     tasks.append(site_http.start())
 
     if tasks:
@@ -372,6 +406,6 @@ async def main():
 app = web.Application()
 app.router.add_route('*', '/{tail:.*}', handle_request)
 
-# Run the main event loop
-asyncio.run(main())
-
+if __name__ == "__main__":
+    # Run the main event loop
+    asyncio.run(main())
