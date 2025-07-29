@@ -1,4 +1,5 @@
 from certbot._internal.main import main as certbot_main
+from check_cert import check_certificates_periodically
 import asyncio
 import socket
 from aiohttp import web
@@ -161,8 +162,6 @@ def generate_self_signed_cert(domain):
         )
         os.system(cmd)
         print(f"Self-signed certificate generated for {domain}.")
-
-    # todo: check if cert expired
 
     return cert_path, key_path
 
@@ -407,5 +406,8 @@ app = web.Application()
 app.router.add_route('*', '/{tail:.*}', handle_request)
 
 if __name__ == "__main__":
+    if os.environ.get('CHECK_CERT') is not None:
+        asyncio.create_task(check_certificates_periodically())
     # Run the main event loop
     asyncio.run(main())
+
