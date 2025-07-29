@@ -15,17 +15,24 @@ import threading
 
 SECURE_LISTEN_PORT = 443
 LISTEN_PORT = 80
-CERTBOT_PORT = 8888  # sudo certbot certonly --standalone --http-01-port 8888 -d example.com
+CERTBOT_PORT = (
+    8888  # sudo certbot certonly --standalone --http-01-port 8888 -d example.com
+)
 # Configuration file path
 CONFIG_FILE = "config/domains.json"
 DOMAIN_MAP = {}
 
+
 class ConfigFileHandler(FileSystemEventHandler):
     """Watchdog event handler to reload the domain map on file change."""
+
     def on_modified(self, event):
         if event.src_path.endswith(CONFIG_FILE):
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Configuration file changed: {event.src_path}")
+            print(
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Configuration file changed: {event.src_path}"
+            )
             load_domain_map()
+
 
 def start_file_watcher():
     try:
@@ -39,36 +46,47 @@ def start_file_watcher():
     except Exception as e:
         print(f"Error starting file watcher {config_path}: {str(e)}")
 
+
 def is_public_ip(ip_str):
     try:
         ip = ipaddress.ip_address(ip_str)
-        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)
+        return not (
+            ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+        )
     except ValueError:
         return False
 
+
 def py_create_certbot_cert(domain, certbot_port=8888):
     args = [
-        'certonly',
-        '--standalone',
-        '--http-01-port', str(certbot_port),
-        '--non-interactive',
-        '--agree-tos',
-        '-m', 'admin@example.com',  # change to your email
-        '-d', domain
+        "certonly",
+        "--standalone",
+        "--http-01-port",
+        str(certbot_port),
+        "--non-interactive",
+        "--agree-tos",
+        "-m",
+        "admin@example.com",  # change to your email
+        "-d",
+        domain,
     ]
 
     print(f"[Certbot] Requesting certificate for {domain} on port {certbot_port}...")
     result = certbot_main(args)
     print(f"[Certbot] Finished with exit code: {result}")
 
+
 def create_certbot_cert(domain):
     """Create a certificate using certbot."""
     try:
         print(f"Creating certificate for {domain} using certbot...")
-        os.system(f"certbot certonly --standalone --http-01-port {CERTBOT_PORT} -d {domain}")
+        os.system(
+            f"certbot certonly --standalone --http-01-port {CERTBOT_PORT} -d {domain}"
+        )
         print(f"Certificate created for {domain}.")
     except Exception as e:
         print(f"Error creating certificate for {domain}: {str(e)}")
+
 
 def curl_domain_test(domain):
     """Test the domain using curl with a random value test header."""
@@ -81,24 +99,27 @@ def curl_domain_test(domain):
         if response == 0:
             print(f"Domain {domain} is reachable.")
             # check if the test header is present in the map
-            if 'testHeader' in DOMAIN_MAP[domain]:
+            if "testHeader" in DOMAIN_MAP[domain]:
                 # compare test header value
-                if DOMAIN_MAP[domain]['testHeader'] == test_value:
+                if DOMAIN_MAP[domain]["testHeader"] == test_value:
                     print(f"Test header matches for {domain}.")
                     # safe to create certbot cert
                     py_create_certbot_cert(domain)
             else:
-                print(f"Test header not found in domain map for {domain}. Request must not be routing correctly.")
+                print(
+                    f"Test header not found in domain map for {domain}. Request must not be routing correctly."
+                )
         else:
             print(f"Domain {domain} is not reachable.")
 
     except Exception as e:
         print(f"Error testing domain {domain}: {str(e)}")
 
+
 def test_domain(domain):
     # Test if the domain resolves to us
     try:
-        # see if cert exists 
+        # see if cert exists
         cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
         key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
         if not (os.path.exists(cert_path) and os.path.exists(key_path)):
@@ -116,33 +137,46 @@ def test_domain(domain):
                         print(f"Domain {domain} resolves to this server and is public.")
                         py_create_certbot_cert(domain)
                     else:
-                        print(f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt.")
+                        print(
+                            f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt."
+                        )
                 else:
-                    print(f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer.")
+                    print(
+                        f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer."
+                    )
                     # curl this domain with test header
                     curl_domain_test(domain)
     except Exception as e:
         print(f"Error testing domain {domain}: {str(e)}")
+
 
 def load_domain_map():
     global DOMAIN_MAP
     try:
         with open(CONFIG_FILE, "r") as file:
             DOMAIN_MAP = json.load(file)
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Loaded domain configuration: {DOMAIN_MAP}")
+            print(
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Loaded domain configuration: {DOMAIN_MAP}"
+            )
             for domain, config in DOMAIN_MAP.items():
-                if 'upstream' not in config:
+                if "upstream" not in config:
                     raise ValueError(f"Missing 'upstream' key for domain: {domain}")
-                if 'redirectInsecure' not in config:
-                    DOMAIN_MAP[domain]['redirectInsecure'] = False
+                if "redirectInsecure" not in config:
+                    DOMAIN_MAP[domain]["redirectInsecure"] = False
 
                 # Test each domain in the map on separate thread
-                threading.Thread(target=test_domain, args=(domain,), daemon=True).start()
+                threading.Thread(
+                    target=test_domain, args=(domain,), daemon=True
+                ).start()
     except Exception as e:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error loading domain configuration: {str(e)}")
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error loading domain configuration: {str(e)}"
+        )
+
 
 # Initial loading of domain map
 load_domain_map()
+
 
 def generate_self_signed_cert(domain):
     """Generate a self-signed certificate if it does not exist."""
@@ -165,6 +199,7 @@ def generate_self_signed_cert(domain):
 
     return cert_path, key_path
 
+
 async def handle_acme_challenge(request):
     """Handle ACME challenges from Let's Encrypt."""
     challenge_url = f"http://127.0.0.1:{CERTBOT_PORT}{request.path_qs}"
@@ -178,19 +213,26 @@ async def handle_acme_challenge(request):
                 return response
     except Exception as e:
         print(f"Error forwarding ACME challenge: {str(e)}")
-        return web.Response(text=f"ACME challenge forwarding failed: {str(e)}", status=502)
+        return web.Response(
+            text=f"ACME challenge forwarding failed: {str(e)}", status=502
+        )
+
 
 WEB_DOMAIN_SCHEMES = {}
+
 
 async def handle_domain_proxy(request):
     """Proxy the incoming request to the appropriate upstream domain."""
     # Extract the host from the request
     host = request.headers.get("Host", "").split(":")[0]
-    
+
     # Map the public domain to the upstream domain
-    upstream_domain = DOMAIN_MAP[host]['upstream']
+    upstream_domain = DOMAIN_MAP[host]["upstream"]
     if not upstream_domain in WEB_DOMAIN_SCHEMES:
-        WEB_DOMAIN_SCHEMES[upstream_domain] = ['https', 'http']
+        if DOMAIN_MAP[host].get("upstreamHttpOnly"):
+            WEB_DOMAIN_SCHEMES[upstream_domain] = ["http"]
+        else:
+            WEB_DOMAIN_SCHEMES[upstream_domain] = ["https", "http"]
     schemes = WEB_DOMAIN_SCHEMES[upstream_domain]
 
     # check for test header
@@ -198,10 +240,8 @@ async def handle_domain_proxy(request):
     if test_header:
         print(f"Test header found: {test_header}")
         # store header value
-        if 'testHeader' not in DOMAIN_MAP[host]:
-            DOMAIN_MAP[host]['testHeader'] = test_header
-
-
+        if "testHeader" not in DOMAIN_MAP[host]:
+            DOMAIN_MAP[host]["testHeader"] = test_header
 
     for scheme in schemes:
         upstream_url = f"{scheme}://{upstream_domain}{request.path_qs}"
@@ -214,11 +254,14 @@ async def handle_domain_proxy(request):
                     url=upstream_url,
                     headers=request.headers,
                     data=request.content,
-                    ssl=False
+                    ssl=False,
                 ) as upstream_response:
 
                     # Prepare the response headers
-                    response = web.StreamResponse(status=upstream_response.status, headers=upstream_response.headers)
+                    response = web.StreamResponse(
+                        status=upstream_response.status,
+                        headers=upstream_response.headers,
+                    )
                     await response.prepare(request)
 
                     # Stream response body to client
@@ -227,8 +270,8 @@ async def handle_domain_proxy(request):
 
                     await response.write_eof()
                     print(f"Successfully proxied to: {upstream_url}")
-                    if scheme == 'http':
-                        WEB_DOMAIN_SCHEMES[upstream_domain] = ['http']
+                    if scheme == "http":
+                        WEB_DOMAIN_SCHEMES[upstream_domain] = ["http"]
                     return response
 
         except Exception as e:
@@ -236,18 +279,22 @@ async def handle_domain_proxy(request):
             continue  # Try the next scheme if the current one fails
 
     print(f"All schemes failed for {upstream_domain}. Returning 502.")
-    return web.Response(text="502 Bad Gateway: Unable to reach upstream server", status=502)
+    return web.Response(
+        text="502 Bad Gateway: Unable to reach upstream server", status=502
+    )
+
 
 WS_DOMAIN_SCHEMES = {}
+
 
 async def handle_websocket_proxy(request):
     """Proxy WebSocket connections to the upstream server."""
     host = request.headers.get("Host", "").split(":")[0]
     upstream_domain = DOMAIN_MAP.get(host)
-    upstream_domain = upstream_domain['upstream']
+    upstream_domain = upstream_domain["upstream"]
 
     if not upstream_domain in WS_DOMAIN_SCHEMES:
-        WS_DOMAIN_SCHEMES[upstream_domain] = ['wss', 'ws']
+        WS_DOMAIN_SCHEMES[upstream_domain] = ["wss", "ws"]
 
     # Try both secure (wss) and non-secure (ws) schemes
     schemes = WS_DOMAIN_SCHEMES[upstream_domain]
@@ -263,7 +310,10 @@ async def handle_websocket_proxy(request):
 
             # Establish a WebSocket connection with the upstream server
             async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(upstream_url, ssl=(scheme == 'wss')) as ws_server:
+                async with session.ws_connect(
+                    upstream_url, ssl=(scheme == "wss")
+                ) as ws_server:
+
                     async def client_to_server():
                         async for msg in ws_client:
                             if msg.type == web.WSMsgType.TEXT:
@@ -286,8 +336,8 @@ async def handle_websocket_proxy(request):
 
                     # Run both client-to-server and server-to-client concurrently
                     await asyncio.gather(client_to_server(), server_to_client())
-                    if scheme == 'ws':
-                        WS_DOMAIN_SCHEMES[upstream_domain] = ['ws']
+                    if scheme == "ws":
+                        WS_DOMAIN_SCHEMES[upstream_domain] = ["ws"]
 
             print(f"WebSocket successfully proxied via {scheme}.")
             return ws_client
@@ -297,7 +347,10 @@ async def handle_websocket_proxy(request):
             continue  # Try the next scheme if the current one fails
 
     print(f"All schemes (wss, ws) failed for {upstream_domain}. Returning 502.")
-    return web.Response(text="502 Bad Gateway: Unable to reach WebSocket upstream server", status=502)
+    return web.Response(
+        text="502 Bad Gateway: Unable to reach WebSocket upstream server", status=502
+    )
+
 
 # HTTP Listener (port 80) - Redirect to HTTPS
 async def handle_redirect(request):
@@ -305,6 +358,7 @@ async def handle_redirect(request):
     redirect_url = f"https://{host}{request.rel_url}"
     print(f"Redirecting HTTP to HTTPS: {redirect_url}")
     raise web.HTTPPermanentRedirect(redirect_url)
+
 
 async def handle_request(request):
     """Main request handler."""
@@ -314,21 +368,26 @@ async def handle_request(request):
         return web.Response(text="403 Forbidden: Domain not allowed", status=403)
 
     domainConfig = DOMAIN_MAP[host]
-    if request.scheme == "http" and domainConfig.get('redirectInsecure', False):
+    if request.scheme == "http" and domainConfig.get("redirectInsecure", False):
         return await handle_redirect(request)
-    
+
     # Check if the request is for an ACME challenge
-    if request.path.startswith('/.well-known/acme-challenge/'):
+    if request.path.startswith("/.well-known/acme-challenge/"):
         return await handle_acme_challenge(request)
-    
+
     # Detect WebSocket upgrade
-    if "upgrade" in request.headers.get("Connection", "").lower() and request.headers.get("Upgrade", "").lower() == "websocket":
+    if (
+        "upgrade" in request.headers.get("Connection", "").lower()
+        and request.headers.get("Upgrade", "").lower() == "websocket"
+    ):
         return await handle_websocket_proxy(request)
 
     # Otherwise, handle as web proxy
     return await handle_domain_proxy(request)
 
+
 ssl_context_cache = {}
+
 
 async def start_server():
     tasks = []
@@ -355,7 +414,9 @@ async def start_server():
 
             # Fallback to self-signed if Let's Encrypt certificates are not found
             if not (os.path.exists(cert_path) and os.path.exists(key_path)):
-                print(f"Certificate for {server_name} not found. Falling back to self-signed.")
+                print(
+                    f"Certificate for {server_name} not found. Falling back to self-signed."
+                )
                 cert_path, key_path = generate_self_signed_cert(server_name)
                 # asyncio.create_task(run_in_thread(obtain_letsencrypt_cert, server_name))
 
@@ -376,11 +437,13 @@ async def start_server():
     print("Starting HTTPS proxy on port 443 with SNI support...")
     runner_https = web.AppRunner(app)
     await runner_https.setup()
-    site_https = web.TCPSite(runner_https, "0.0.0.0", SECURE_LISTEN_PORT, ssl_context=ssl_context)
+    site_https = web.TCPSite(
+        runner_https, "0.0.0.0", SECURE_LISTEN_PORT, ssl_context=ssl_context
+    )
     tasks.append(site_https.start())
 
     app_http = web.Application()
-    app_http.router.add_route('*', '/{tail:.*}', handle_request)
+    app_http.router.add_route("*", "/{tail:.*}", handle_request)
     runner_http = web.AppRunner(app_http)
     await runner_http.setup()
     site_http = web.TCPSite(runner_http, "0.0.0.0", LISTEN_PORT)
@@ -388,6 +451,7 @@ async def start_server():
 
     if tasks:
         await asyncio.gather(*tasks)
+
 
 async def main():
     print("Starting auto-reload config task...")
@@ -401,13 +465,13 @@ async def main():
     # Wait indefinitely until the event is set (which it never is)
     await stop_event.wait()
 
+
 # Set up the application and routes
 app = web.Application()
-app.router.add_route('*', '/{tail:.*}', handle_request)
+app.router.add_route("*", "/{tail:.*}", handle_request)
 
 if __name__ == "__main__":
-    if os.environ.get('CHECK_CERT') is not None:
+    if os.environ.get("CHECK_CERT") is not None:
         asyncio.create_task(check_certificates_periodically())
     # Run the main event loop
     asyncio.run(main())
-

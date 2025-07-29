@@ -1,4 +1,4 @@
 {
-  "example.com": { "upstream": "localhost:3000", "redirectInsecure": true },
+  "example.com": { "upstream": "localhost:3000", "redirectInsecure": true, "upstreamHttpOnly": true },
   "example2.com": { "upstream": "localhost:3000", "redirectInsecure": false }
 }
