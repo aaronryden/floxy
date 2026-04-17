@@ -58,6 +58,32 @@ def is_public_ip(ip_str):
         return False
 
 
+def get_local_interface_ips():
+    local_ips = set()
+    host_candidates = {socket.gethostname(), socket.getfqdn()}
+    for host in host_candidates:
+        try:
+            for info in socket.getaddrinfo(host, None):
+                ip = info[4][0]
+                parsed = ipaddress.ip_address(ip)
+                if not parsed.is_loopback:
+                    local_ips.add(ip)
+        except socket.gaierror:
+            continue
+    return local_ips
+
+
+def get_domain_ips(domain):
+    domain_ips = set()
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            for info in socket.getaddrinfo(domain, None, family, socket.SOCK_STREAM):
+                domain_ips.add(info[4][0])
+        except socket.gaierror:
+            continue
+    return domain_ips
+
+
 def py_create_certbot_cert(domain, certbot_port=8888):
     import subprocess
 
@@ -66,6 +92,7 @@ def py_create_certbot_cert(domain, certbot_port=8888):
         "certonly",
         "--standalone",
         "--http-01-port",
+        str(certbot_port),
         "--non-interactive",
         "--agree-tos",
         "-m",
@@ -141,17 +168,16 @@ def test_domain(domain):
         cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
         key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
         if not (os.path.exists(cert_path) and os.path.exists(key_path)):
-            print(f"Certificate for {domain} found.")
+            print(f"Certificate for {domain} not found.")
             response = os.system(f"ping -c 1 {domain}")
             if response == 0:
-                # compare IP address to any address of this machine
-                # ip_address = os.popen(f"getent hosts {domain}").read().split()[0]
-                ip_address = socket.gethostbyname(domain)
+                domain_ips = get_domain_ips(domain)
+                local_ips = get_local_interface_ips()
+                matching_ips = domain_ips.intersection(local_ips)
 
-                local_ip = socket.gethostbyname(domain)
-                if ip_address in local_ip:
+                if matching_ips:
                     print(f"Domain {domain} resolves to this server.")
-                    if is_public_ip(ip_address):
+                    if any(is_public_ip(ip) for ip in matching_ips):
                         print(f"Domain {domain} resolves to this server and is public.")
                         py_create_certbot_cert(domain)
                     else:
@@ -172,7 +198,9 @@ def load_domain_map():
     global DOMAIN_MAP
     try:
         with open(CONFIG_FILE, "r") as file:
-            DOMAIN_MAP = json.load(file)
+            new_domain_map = json.load(file)
+            DOMAIN_MAP.clear()
+            DOMAIN_MAP.update(new_domain_map)
             print(
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Loaded domain configuration: {DOMAIN_MAP}"
             )
@@ -477,6 +505,9 @@ async def main():
     print("Starting the server...")
     await start_server()
 
+    if os.environ.get("CHECK_CERT") is not None:
+        asyncio.create_task(check_certificates_periodically(DOMAIN_MAP))
+
     # Use an asyncio event to keep the loop alive
     stop_event = asyncio.Event()
 
@@ -489,7 +520,5 @@ app = web.Application()
 app.router.add_route("*", "/{tail:.*}", handle_request)
 
 if __name__ == "__main__":
-    if os.environ.get("CHECK_CERT") is not None:
-        asyncio.create_task(check_certificates_periodically())
     # Run the main event loop
     asyncio.run(main())
