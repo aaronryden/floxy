@@ -8,6 +8,7 @@ import ipaddress
 import os
 import json
 import time
+import queue
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from watchdog.observers import Observer
@@ -22,6 +23,9 @@ CERTBOT_PORT = (
 # Configuration file path
 CONFIG_FILE = "config/domains.json"
 DOMAIN_MAP = {}
+CERTBOT_REQUESTS = queue.Queue()
+CERTBOT_REQUESTED = set()
+CERTBOT_REQUESTS_LOCK = threading.Lock()
 
 
 class ConfigFileHandler(FileSystemEventHandler):
@@ -84,9 +88,7 @@ def get_domain_ips(domain):
     return domain_ips
 
 
-def py_create_certbot_cert(domain, certbot_port=8888):
-    import subprocess
-
+async def run_certbot_cert(domain, certbot_port=8888):
     cmd = [
         "certbot",
         "certonly",
@@ -101,13 +103,39 @@ def py_create_certbot_cert(domain, certbot_port=8888):
         domain,
     ]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode == 0:
         print(f"[Certbot] Finished successfully")
-    except subprocess.CalledProcessError as e:
-        print(f"[Certbot] Error: {e}")
-        print(f"[Certbot] stdout: {e.stdout}")
-        print(f"[Certbot] stderr: {e.stderr}")
+        return
+    print(f"[Certbot] Error: certbot exited with code {process.returncode}")
+    print(f"[Certbot] stdout: {stdout.decode(errors='replace')}")
+    print(f"[Certbot] stderr: {stderr.decode(errors='replace')}")
+
+
+def request_certbot_cert(domain):
+    with CERTBOT_REQUESTS_LOCK:
+        if domain in CERTBOT_REQUESTED:
+            return
+        CERTBOT_REQUESTED.add(domain)
+    CERTBOT_REQUESTS.put(domain)
+    print(f"[Certbot] Queued certificate request for {domain}")
+
+
+async def process_certbot_requests():
+    while True:
+        domain = await asyncio.to_thread(CERTBOT_REQUESTS.get)
+        try:
+            await run_certbot_cert(domain)
+        except Exception as e:
+            print(f"[Certbot] Unexpected error creating certificate for {domain}: {e}")
+        finally:
+            with CERTBOT_REQUESTS_LOCK:
+                CERTBOT_REQUESTED.discard(domain)
 
 
 def create_certbot_cert(domain):
@@ -149,7 +177,7 @@ def curl_domain_test(domain):
                 if DOMAIN_MAP[domain]["testHeader"] == test_value:
                     print(f"Test header matches for {domain}.")
                     # safe to create certbot cert
-                    py_create_certbot_cert(domain)
+                    request_certbot_cert(domain)
             else:
                 print(
                     f"Test header not found in domain map for {domain}. Request must not be routing correctly."
@@ -179,7 +207,7 @@ def test_domain(domain):
                     print(f"Domain {domain} resolves to this server.")
                     if any(is_public_ip(ip) for ip in matching_ips):
                         print(f"Domain {domain} resolves to this server and is public.")
-                        py_create_certbot_cert(domain)
+                        request_certbot_cert(domain)
                     else:
                         print(
                             f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt."
@@ -506,6 +534,10 @@ async def start_server():
 async def main():
     print("Starting auto-reload config task...")
     threading.Thread(target=start_file_watcher, daemon=True).start()
+
+    print("Starting certificate request worker...")
+    asyncio.create_task(process_certbot_requests())
+
     print("Starting the server...")
     await start_server()
 
