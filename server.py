@@ -435,8 +435,15 @@ async def handle_request(request):
     """Main request handler."""
     host = request.headers.get("Host", "").split(":")[0]
     if host not in DOMAIN_MAP:
-        print(f"Host {host} not found in DOMAIN_MAP.")
-        return web.Response(text="403 Forbidden: Domain not allowed", status=403)
+        print(f"Host {host} not found in DOMAIN_MAP. Aborting connection.")
+        transport = request.transport
+        if transport is not None:
+            transport.abort()
+        return web.Response(
+            status=421,
+            text="Misdirected Request",
+            headers={"Connection": "close"},
+        )
 
     domainConfig = DOMAIN_MAP[host]
     if request.scheme == "http" and domainConfig.get("redirectInsecure", False):
@@ -475,11 +482,11 @@ async def start_server():
 
         # Use the requested server name to load the appropriate certificate
         if not server_name:
-            print("SNI callback invoked without server_name. Ignoring.")
-            return
+            print("SNI callback invoked without server_name. Rejecting handshake.")
+            raise ssl.SSLError("unrecognized_name")
         if server_name not in DOMAIN_MAP:
-            print(f"SNI server name '{server_name}' not found in DOMAIN_MAP. Ignoring.")
-            return
+            print(f"SNI server name '{server_name}' not found in DOMAIN_MAP. Rejecting handshake.")
+            raise ssl.SSLError("unrecognized_name")
 
         if server_name in ssl_context_cache:
             temp_context = ssl_context_cache[server_name]
