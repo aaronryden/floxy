@@ -23,10 +23,13 @@ CERTBOT_PORT = (
 )
 # Configuration file path
 CONFIG_FILE = "config/domains.json"
+BLOCKLIST_FILE = "config/blocklist.txt"
 DOMAIN_MAP = {}
 CERTBOT_REQUESTS = queue.Queue()
 CERTBOT_REQUESTED = set()
 CERTBOT_REQUESTS_LOCK = threading.Lock()
+SCANNER_PATH_PREFIXES = tuple()
+SCANNER_PATH_EXACT = set()
 
 
 class ConfigFileHandler(FileSystemEventHandler):
@@ -38,6 +41,11 @@ class ConfigFileHandler(FileSystemEventHandler):
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Configuration file changed: {event.src_path}"
             )
             load_domain_map()
+        elif event.src_path.endswith(BLOCKLIST_FILE):
+            print(
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Blocklist file changed: {event.src_path}"
+            )
+            load_scanner_blocklist()
 
 
 def start_file_watcher():
@@ -87,6 +95,55 @@ def get_domain_ips(domain):
         except socket.gaierror:
             continue
     return domain_ips
+
+
+def is_scanner_path(path):
+    normalized = path.lower()
+    if normalized in SCANNER_PATH_EXACT:
+        return True
+    for prefix in SCANNER_PATH_PREFIXES:
+        if normalized.startswith(prefix):
+            return True
+    return False
+
+
+def load_scanner_blocklist():
+    global SCANNER_PATH_PREFIXES
+    global SCANNER_PATH_EXACT
+    try:
+        prefix_rules = set()
+        exact_rules = set()
+        with open(BLOCKLIST_FILE, "r") as file:
+            for raw_line in file:
+                line = raw_line.strip().lower()
+                if not line or line.startswith("#"):
+                    continue
+                if not line.startswith("/"):
+                    line = "/" + line
+                if line.endswith("*"):
+                    prefix_rules.add(line[:-1])
+                else:
+                    exact_rules.add(line)
+
+        SCANNER_PATH_PREFIXES = tuple(sorted(prefix_rules))
+        SCANNER_PATH_EXACT = exact_rules
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Loaded scanner blocklist: "
+            f"{len(SCANNER_PATH_PREFIXES)} prefixes, {len(SCANNER_PATH_EXACT)} exact paths"
+        )
+    except FileNotFoundError:
+        SCANNER_PATH_PREFIXES = tuple()
+        SCANNER_PATH_EXACT = set()
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Blocklist file not found at {BLOCKLIST_FILE}. "
+            "Blocking rules are empty."
+        )
+    except Exception as e:
+        SCANNER_PATH_PREFIXES = tuple()
+        SCANNER_PATH_EXACT = set()
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error loading scanner blocklist: {str(e)}"
+        )
 
 
 async def run_certbot_cert(domain, certbot_port=8888):
@@ -247,6 +304,7 @@ def load_domain_map():
 
 # Initial loading of domain map
 load_domain_map()
+load_scanner_blocklist()
 
 
 def generate_self_signed_cert(domain):
@@ -442,6 +500,17 @@ async def handle_request(request):
         return web.Response(
             status=421,
             text="Misdirected Request",
+            headers={"Connection": "close"},
+        )
+
+    if is_scanner_path(request.path):
+        print(f"Blocked scanner path for host {host}: {request.path}")
+        transport = request.transport
+        if transport is not None:
+            transport.abort()
+        return web.Response(
+            status=404,
+            text="Not Found",
             headers={"Connection": "close"},
         )
 

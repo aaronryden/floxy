@@ -1,0 +1,22 @@
+# One path rule per line.
+# Exact match: /path/to/file
+# Prefix match: /path/prefix/*
+
+/dump/*
+/backup/*
+/panel/*
+/internal/*
+/services/internal*
+/root/*
+/.stripe/*
+/.well-known/stripe/*
+/.git/*
+/wp-admin*
+/phpmyadmin*
+/stripe*
+
+/.env
+/frontend.php
+/stripe-credentials.json
+/src/config/stripe.js
+/wp-login.php
