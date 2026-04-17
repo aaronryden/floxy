@@ -139,36 +139,28 @@ async def process_certbot_requests():
                 CERTBOT_REQUESTED.discard(domain)
 
 
-def create_certbot_cert(domain):
-    """Create a certificate using certbot."""
-    try:
-        print(f"Creating certificate for {domain} using certbot...")
-        os.system(
-            f"certbot certonly --standalone --http-01-port {CERTBOT_PORT} -d {domain}"
-        )
-        print(f"Certificate created for {domain}.")
-    except Exception as e:
-        print(f"Error creating certificate for {domain}: {str(e)}")
-
-
 def curl_domain_test(domain):
     """Test the domain using an HTTP probe with a random value test header."""
     try:
         # Generate a random value for the test header
         test_header = "X-Test-Header"
         test_value = os.urandom(16).hex()
-
-        url = f"http://{domain}"
-        req = Request(url, headers={test_header: test_value}, method="HEAD")
         reachable = False
-        try:
-            with urlopen(req, timeout=10):
+        tls_context = ssl._create_unverified_context()
+        probe_urls = [f"https://{domain}", f"http://{domain}"]
+
+        for probe_url in probe_urls:
+            req = Request(probe_url, headers={test_header: test_value}, method="HEAD")
+            try:
+                with urlopen(req, timeout=10, context=tls_context):
+                    reachable = True
+                break
+            except HTTPError:
+                # A non-2xx HTTP response still proves reachability.
                 reachable = True
-        except HTTPError:
-            # A non-2xx HTTP response still proves reachability.
-            reachable = True
-        except URLError as e:
-            print(f"Domain probe failed for {domain}: {e}")
+                break
+            except URLError as e:
+                print(f"Domain probe failed for {domain} via {probe_url}: {e}")
 
         if reachable:
             print(f"Domain {domain} is reachable.")
