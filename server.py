@@ -449,32 +449,36 @@ async def start_server():
         print(f"SNI callback invoked for: {server_name}")
 
         # Use the requested server name to load the appropriate certificate
-        if not server_name in DOMAIN_MAP:
-            raise Exception(f"Server name '{server_name}' not found in DOMAIN_MAP")
-        else:
-            if server_name in ssl_context_cache:
-                temp_context = ssl_context_cache[server_name]
+        if not server_name:
+            print("SNI callback invoked without server_name. Ignoring.")
+            return
+        if server_name not in DOMAIN_MAP:
+            print(f"SNI server name '{server_name}' not found in DOMAIN_MAP. Ignoring.")
+            return
 
-            cert_path = f"/etc/letsencrypt/live/{server_name}/fullchain.pem"
-            key_path = f"/etc/letsencrypt/live/{server_name}/privkey.pem"
+        if server_name in ssl_context_cache:
+            temp_context = ssl_context_cache[server_name]
 
-            # Fallback to self-signed if Let's Encrypt certificates are not found
-            if not (os.path.exists(cert_path) and os.path.exists(key_path)):
-                print(
-                    f"Certificate for {server_name} not found. Falling back to self-signed."
-                )
-                cert_path, key_path = generate_self_signed_cert(server_name)
-                # asyncio.create_task(run_in_thread(obtain_letsencrypt_cert, server_name))
+        cert_path = f"/etc/letsencrypt/live/{server_name}/fullchain.pem"
+        key_path = f"/etc/letsencrypt/live/{server_name}/privkey.pem"
 
-            try:
-                temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
-                ssl_context_cache[server_name] = temp_context
+        # Fallback to self-signed if Let's Encrypt certificates are not found
+        if not (os.path.exists(cert_path) and os.path.exists(key_path)):
+            print(
+                f"Certificate for {server_name} not found. Falling back to self-signed."
+            )
+            cert_path, key_path = generate_self_signed_cert(server_name)
+            # asyncio.create_task(run_in_thread(obtain_letsencrypt_cert, server_name))
 
-                ssl_obj.context = temp_context
-                print(f"Loaded certificate for {server_name}")
-            except Exception as e:
-                print(f"Error loading certificate for {server_name}: {e}")
+        try:
+            temp_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            temp_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            ssl_context_cache[server_name] = temp_context
+
+            ssl_obj.context = temp_context
+            print(f"Loaded certificate for {server_name}")
+        except Exception as e:
+            print(f"Error loading certificate for {server_name}: {e}")
 
     # Set the SNI callback to dynamically load certificates
     ssl_context.sni_callback = sni_callback
