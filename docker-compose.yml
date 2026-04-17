@@ -2,8 +2,8 @@ version: '3.8'
 
 services:
   floxy:
-    image: aaron/floxy:latest
-    container_name: floxy
+    build:
+      context: .
     ports:
       - "80:80"
       - "443:443"

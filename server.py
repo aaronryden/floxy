@@ -1,4 +1,3 @@
-from certbot._internal.main import main as certbot_main
 from check_cert import check_certificates_periodically
 import asyncio
 import socket
@@ -9,6 +8,8 @@ import ipaddress
 import os
 import json
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import threading
@@ -58,22 +59,28 @@ def is_public_ip(ip_str):
 
 
 def py_create_certbot_cert(domain, certbot_port=8888):
-    args = [
+    import subprocess
+
+    cmd = [
+        "certbot",
         "certonly",
         "--standalone",
         "--http-01-port",
-        str(certbot_port),
         "--non-interactive",
         "--agree-tos",
         "-m",
-        "admin@example.com",  # change to your email
+        f"admin@{domain}",
         "-d",
         domain,
     ]
 
-    print(f"[Certbot] Requesting certificate for {domain} on port {certbot_port}...")
-    result = certbot_main(args)
-    print(f"[Certbot] Finished with exit code: {result}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print(f"[Certbot] Finished successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"[Certbot] Error: {e}")
+        print(f"[Certbot] stdout: {e.stdout}")
+        print(f"[Certbot] stderr: {e.stderr}")
 
 
 def create_certbot_cert(domain):
@@ -89,14 +96,25 @@ def create_certbot_cert(domain):
 
 
 def curl_domain_test(domain):
-    """Test the domain using curl with a random value test header."""
+    """Test the domain using an HTTP probe with a random value test header."""
     try:
         # Generate a random value for the test header
         test_header = "X-Test-Header"
         test_value = os.urandom(16).hex()
-        # Use curl to test the domain with the test header
-        os.system(f"curl -I -H '{test_header}: {test_value}' http://{domain}")
-        if response == 0:
+
+        url = f"http://{domain}"
+        req = Request(url, headers={test_header: test_value}, method="HEAD")
+        reachable = False
+        try:
+            with urlopen(req, timeout=10):
+                reachable = True
+        except HTTPError:
+            # A non-2xx HTTP response still proves reachability.
+            reachable = True
+        except URLError as e:
+            print(f"Domain probe failed for {domain}: {e}")
+
+        if reachable:
             print(f"Domain {domain} is reachable.")
             # check if the test header is present in the map
             if "testHeader" in DOMAIN_MAP[domain]:
