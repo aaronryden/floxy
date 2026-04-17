@@ -9,6 +9,7 @@ import os
 import json
 import time
 import queue
+import traceback
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from watchdog.observers import Observer
@@ -197,29 +198,33 @@ def test_domain(domain):
         key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
         if not (os.path.exists(cert_path) and os.path.exists(key_path)):
             print(f"Certificate for {domain} not found.")
-            response = os.system(f"ping -c 1 {domain}")
-            if response == 0:
-                domain_ips = get_domain_ips(domain)
-                local_ips = get_local_interface_ips()
-                matching_ips = domain_ips.intersection(local_ips)
+            domain_ips = get_domain_ips(domain)
+            if not domain_ips:
+                print(f"Domain {domain} DNS lookup failed, fallback to HTTP layer.")
+                curl_domain_test(domain)
+                return
 
-                if matching_ips:
-                    print(f"Domain {domain} resolves to this server.")
-                    if any(is_public_ip(ip) for ip in matching_ips):
-                        print(f"Domain {domain} resolves to this server and is public.")
-                        request_certbot_cert(domain)
-                    else:
-                        print(
-                            f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt."
-                        )
+            local_ips = get_local_interface_ips()
+            matching_ips = domain_ips.intersection(local_ips)
+
+            if matching_ips:
+                print(f"Domain {domain} resolves to this server.")
+                if any(is_public_ip(ip) for ip in matching_ips):
+                    print(f"Domain {domain} resolves to this server and is public.")
+                    request_certbot_cert(domain)
                 else:
                     print(
-                        f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer."
+                        f"Domain {domain} resolves to this server, but IP is private. Unable to create cert with letsencrypt."
                     )
-                    # curl this domain with test header
-                    curl_domain_test(domain)
+            else:
+                print(
+                    f"Domain {domain} does not resolve to this server directly, fallback to HTTP layer."
+                )
+                # curl this domain with test header
+                curl_domain_test(domain)
     except Exception as e:
         print(f"Error testing domain {domain}: {str(e)}")
+        traceback.print_exc()
 
 
 def load_domain_map():
